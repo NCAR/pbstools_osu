@@ -5,7 +5,7 @@
 # Copyright 2016, 2017, 2018 Ohio Supercomputer Center
 # Authors:  Aaron Maharry
 #           Troy Baer <troy@osc.edu>
-#
+# Editors:  Paul Guidas (June 2025)
 # License:  GNU GPL v2, see ../COPYING for details.
 
 import copy
@@ -287,6 +287,11 @@ class jobinfo:
         else:
             return 0
 
+    def run_count(self):
+        if ( self.has_resource("run_count") ):
+            return int(self.get_resource("run_count"))
+        else:
+            return 0 
     def start_count(self):
         if ( self.has_resource("start_count") ):
             return int(self.get_resource("start_count"))
@@ -352,7 +357,7 @@ class jobinfo:
                     nodes = 1
                 if ( len(nodes_and_ppn)>=2 ):
                     try:
-                        ppn = int(re.search("ppn=(\d+)", nodes_and_ppn[1]).group(1))
+                        ppn = int(re.search(r"ppn=(\d+)", nodes_and_ppn[1]).group(1))
                     except AttributeError:
                         ppn = 1
                 else:
@@ -390,28 +395,19 @@ class jobinfo:
         return max(processors,ncpus)
 
     def num_gpus(self):
-        ngpus = 0
-        # sadly, there doesn't appear to be a more elegant way to do this
-        if ( self.nodes() is not None and "gpus=" in self.nodes() ):
-            # Compute the nodes requested and the processors per node
-            for nodelist in self.nodes().split("+"):
-                nodes_and_props = nodelist.split(":")
-                try:
-                    nodes = int(nodes_and_props[0])
-                except:
-                    # Handles malformed log values
-                    nodes = 1
-                gpn = 0
-                if ( len(nodes_and_props)>=2 ):
-                    for nodeprop in nodes_and_props[1:]:
-                        if ( re.match("^gpus=(\d+)$", nodeprop) ):
-                            gpn = int(re.search("^gpus=(\d+)$", nodeprop).group(1))
-                nodes = max(1,nodes)
-                gpn = max(0,gpn)
-                ngpus = ngpus + nodes*gpn
-        elif ( self.gres() is not None and "gpus:" in self.gres() ):
-            ngpus = int(re.search("gpus:(\d+)",self.gres()).group(1))
-        return ngpus
+        """ Returns the total number of GPUs requested/used by the job.
+            Defaults to 0 if no GPUs were used. """
+        if ( self.has_resource("Resource_List.ngpus") ):
+            return int(self.get_resource("Resource_List.ngpus"))
+        else:
+            return 0
+    def gpu_type(self):
+        """ Returns the type of GPU used by the job. 
+            If no GPU was used, returns None. """
+        if ( self.has_resource("Resource_List.gpu_type") ):
+            return str(self.get_resource("Resource_List.gpu_type"))
+        else:
+            return None
 
     def feature(self):
         return self.get_resource("Resource_List.feature")
@@ -721,10 +717,10 @@ def raw_data_from_file(filename):
     resource name and corresponding value
     """
     try:
-        if re.search("\.gz$", filename):
-            acct_data = gzip.open(filename)
+        if re.search(r"\.gz$", filename):
+            acct_data = gzip.open(filename, 'rt')
         else:
-            acct_data = open(filename)
+            acct_data = open(filename,'r')
     except IOError as e:
         print("ERROR: Failed to read PBS accounting log %s" % (filename))
         return []
@@ -762,7 +758,7 @@ def raw_data_from_file(filename):
                 # so ignore it.
                 pass
             elif ( resource!="" ):
-                logger.warn("filename=%s, jobid=%s:  Malformed resource \"%s\"" % (filename,jobid,resource))
+                logger.warning("filename=%s, jobid=%s:  Malformed resource \"%s\"" % (filename,jobid,resource))
         
         # Store the data in the output
         output.append((jobid, time, record_type, resources_dict))
@@ -787,7 +783,7 @@ def raw_data_from_files(filelist,warn_missing=False):
             for record in raw_data_from_file(filename):
                 rawdata.append(record)
         elif ( warn_missing ):
-            logger.warn("%s does not exist" % filename)
+            logger.warning("%s does not exist" % filename)
             continue
     return rawdata
 
@@ -885,7 +881,7 @@ def time_to_sec(timestr):
         return 0
     elif ( isinstance(timestr,int) ):
         return timestr
-    if ( not re.match("[\d\-:]+",timestr) ):
+    if ( not re.match(r"[\d\-:]+",timestr) ):
         raise ValueError("Malformed time \""+timestr+"\"")
     sec = 0
     elt = timestr.split(":")
@@ -918,7 +914,9 @@ def sec_to_time(seconds):
 
 
 def mem_to_kb(memstr):
-    match = re.match("^(\d+)([TtGgMmKk])([BbWw])$",memstr)
+    if memstr is None:
+        return 0
+    match = re.match(r"^(\d+)([TtGgMmKk])([BbWw])$",memstr)
     if ( match is not None and len(match.groups())==3 ):
         number = int(match.group(1))
         multiplier = 1
@@ -934,8 +932,8 @@ def mem_to_kb(memstr):
         if ( units in ["W","w"] ):
             numbytes = 8
         return number*multiplier*numbytes
-    elif ( re.match("^(\d+)([BbWw])$",memstr) ):
-        match = re.match("^(\d+)([BbWw])$",memstr)
+    elif ( re.match(r"^(\d+)([BbWw])$",memstr) ):
+        match = re.match(r"^(\d+)([BbWw])$",memstr)
         number = int(match.group(1))
         numbytes = 1
         units = match.group(2)
@@ -1024,7 +1022,7 @@ class pbsacctDB:
         return self._dbhost
 
     def setType(self, dbtype):
-        supported_dbs = ["mysql","pgsql","sqlite2","sqlite3"]
+        supported_dbs = ["mysql","pgsql","sqlite3"]
         if ( dbtype in supported_dbs ):
             self._dbtype = dbtype
         else:
@@ -1083,7 +1081,7 @@ class pbsacctDB:
             raise IOError("%s does not exist" % cfgfilename)
         cfgfile = open(cfgfilename)
         for line in cfgfile.readlines():
-            if ( not line.startswith("#") and not re.match('^\s*$',line) ):
+            if ( not line.startswith("#") and not re.match(r'^\s*$',line) ):
                 try:
                     (keyword,value) = line.rstrip('\n').split("=")
                     if ( keyword=="dbhost" ):
@@ -1109,7 +1107,7 @@ class pbsacctDB:
                     else:
                         raise RuntimeError("Unknown keyword \"%s\"" % keyword)
                 except Exception as e:
-                    logger.warn(str(e))
+                    logger.warning(str(e))
                     pass
 
     def connect(self):
@@ -1128,12 +1126,6 @@ class pbsacctDB:
                                               db=self._dbname,
                                               user=self._dbuser,
                                               passwd=self._dbpasswd)
-            return self._dbhandle
-        elif ( self.getType()=="sqlite2" ):
-            import pysqlite2.dbapi2 as sqlite
-            if ( self.getSQLiteFile() is None ):
-                raise RuntimeError("No SQLite database file specified")
-            self._dbhandle = sqlite.connect(self.getSQLiteFile())
             return self._dbhandle
         elif ( self.getType()=="sqlite3" ):
             import sqlite3 as sqlite
@@ -1577,7 +1569,7 @@ class pbsacctDB:
 #     def test_get_job(self):
 
 
-if __name__ == "__main__":
-    unittest.main()
+#if __name__ == "__main__":
+#    unittest.main()
     #import glob
     #print str(jobs_from_files(glob.glob("/users/sysp/amaharry/acct-data/201603*")))
