@@ -1569,7 +1569,7 @@ class pbsacctDB:
 #     def test_get_job(self):
 
 
-#if __name__ == "__main__":
-#    unittest.main()
+if __name__ == "__main__":
+    unittest.main()
     #import glob
     #print str(jobs_from_files(glob.glob("/users/sysp/amaharry/acct-data/201603*")))
